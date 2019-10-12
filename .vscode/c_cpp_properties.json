@@ -1,0 +1,17 @@
+{
+    "configurations": [
+        {
+            "name": "Win32",
+            "includePath": [
+                "C:\\Users\\Admin\\AppData\\Local\\Arduino15\\packages\\esp32\\tools\\**",
+                "C:\\Users\\Admin\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\1.0.2\\**"
+            ],
+            "forcedInclude": [],
+            "intelliSenseMode": "msvc-x64",
+            "compilerPath": "C:\\MinGW\\bin\\gcc.exe",
+            "cStandard": "c11",
+            "cppStandard": "c++17"
+        }
+    ],
+    "version": 4
+}
