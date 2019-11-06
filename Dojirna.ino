@@ -39,12 +39,15 @@
 //#include <SerialCommand.h>
 #include <JC_Button.h>
 
-#define LED_P 14 //27 26
+#define LED_P 27
 #define DALAS_PIN 13
-#define BTN_P 12
+#define BTN_P 14
 #define BOILER_P 16
 #define PIPE_HEATER_P 4
 
+#define BOILER_OK_TEMP (BOILER_MAX_TEMP - 10)
+#define BOILER_MAX_TEMP 70.0
+#define TEMP_HYST 4.0
 
 Button BTN(BTN_P);
 
@@ -56,13 +59,14 @@ Button BTN(BTN_P);
 OneWire oneWire(DALAS_PIN);
 DallasTemperature sensors(&oneWire);
 
-DeviceAddress boiler =       {0x28, 0xFF, 0x64, 0x1D, 0x8B, 0x8B, 0xEE, 0xBA};
-DeviceAddress pipe_ground =  {0x28, 0xFF, 0x77, 0x01, 0x40, 0x17, 0x03, 0xAA};
-DeviceAddress pipe_inside =  {0x28, 0xFF, 0x9E, 0x11, 0x40, 0x17, 0x03, 0xBB};
+DeviceAddress boiler = {0x28, 0xFF, 0x64, 0x1D, 0x8B, 0x8B, 0xEE, 0xBA};
+DeviceAddress pipe_ground = {0x28, 0xFF, 0x77, 0x01, 0x40, 0x17, 0x03, 0xAA};
+DeviceAddress pipe_inside = {0x28, 0xFF, 0x9E, 0x11, 0x40, 0x17, 0x03, 0xBB};
 DeviceAddress pipe_outside = {0x28, 0xFF, 0xBC, 0x41, 0x01, 0x70, 0x03, 0x18};
 
 double t_boiler, t_pipe_inside, t_pipe_outside, t_pipe_ground = 0.0;
 bool blik_p, slow_p, fast_p = 0; //for blinking
+bool hdo = true;                 // Pokud je nocni proud
 
 //SerialCommand SCmd; // The SerialCommand object
 
@@ -76,9 +80,11 @@ double pipe_min_temperature(void);
 void pipe_heater_control(void);
 void boiler_control(void);
 void led(void);
+void boiler_relay(bool);
 
 void led(void)
 {
+
   if (!digitalRead(PIPE_HEATER_P))
   {
 
@@ -88,30 +94,110 @@ void led(void)
   {
     digitalWrite(LED_P, slow_p ? LOW : HIGH);
   }
-  else
+  else if (t_boiler > BOILER_OK_TEMP)
   {
     digitalWrite(LED_P, HIGH);
+  }
+
+  else
+  {
+    digitalWrite(LED_P, LOW);
   }
 }
 
 void pipe_heater_control(void)
 {
+  if (pipe_min_temperature() != pipe_min_temperature())
+  {
 
-  digitalWrite(PIPE_HEATER_P, HIGH);
+    digitalWrite(PIPE_HEATER_P, HIGH); //Something is with temperature sensor
+  }
 
   if (pipe_min_temperature() < PIPE_TEMP_ON)
   {
-    // ON
+    digitalWrite(PIPE_HEATER_P, LOW); // Turn heating on
   }
   if (pipe_min_temperature() > PIPE_TEMP_OFF)
   {
-    // OFF
+    digitalWrite(PIPE_HEATER_P, HIGH); // Turn heating off
   }
 }
 
+#define BOILER_OVERIDE_TIME 30 //minutes
 void boiler_control(void)
 {
-  digitalWrite(BOILER_P, LOW);
+  bool manual_overide = false;
+  static unsigned long lastT = 0;
+
+  if (BTN.wasReleased())
+  {
+    lastT = millis();
+    manual_overide = !manual_overide;
+  }
+
+  if (millis() > lastT + (BOILER_OVERIDE_TIME * 60000))
+  {
+    manual_overide = false;
+  }
+
+  if (hdo || manual_overide)
+  {
+    boiler_relay(1); // topit, hdo, nebo prikaz tlacitkem
+  }
+  else
+  {
+    if (t_boiler != t_boiler)
+    {
+      boiler_relay(0); //rozbite cidlo boileru, netopis
+      return;
+    }
+
+    if (t_boiler > PIPE_TEMP_OFF)
+    {
+      boiler_relay(0);
+    }
+
+    if (t_boiler < PIPE_TEMP_ON)
+    {
+      boiler_relay(1); // vypnuto, ale mrzne, zatopit
+    }
+  }
+}
+
+void boiler_relay(bool x)
+{
+
+  if (x)
+  {
+    if (t_boiler != t_boiler)
+    {
+      digitalWrite(BOILER_P, LOW); // je pozadavek na topeni, ale je vadne cidlo, verit termostatu
+      return;
+    }
+    if (t_boiler > BOILER_MAX_TEMP)
+    {
+      digitalWrite(BOILER_P, HIGH); //natopeno
+    }
+    if (t_boiler < BOILER_MAX_TEMP - TEMP_HYST)
+    {
+      digitalWrite(BOILER_P, LOW); // natopeno
+    }
+  }
+  else
+  {
+    digitalWrite(BOILER_P, HIGH);
+  }
+}
+
+float do_NaN(float temp)
+{
+  if (temp < -50 || temp > 150)
+  {
+    return 0.0 / 0.0;
+  }
+  else {
+    return temp;
+  }
 }
 
 bool temperature_read(void)
@@ -122,14 +208,14 @@ bool temperature_read(void)
 
   if ((millis() > lastT + conversion_delay))
   {
-    t_boiler = sensors.getTempC(boiler);
-    t_pipe_ground = sensors.getTempC(pipe_ground);
-    t_pipe_inside = sensors.getTempC(pipe_inside);
-    t_pipe_outside = sensors.getTempC(pipe_outside);
+    t_boiler = do_NaN(sensors.getTempC(boiler));
+    t_pipe_ground = do_NaN(sensors.getTempC(pipe_ground));
+    t_pipe_inside = do_NaN(sensors.getTempC(pipe_inside));
+    t_pipe_outside = do_NaN(sensors.getTempC(pipe_outside));
 
     sensors.requestTemperatures();
     lastT = millis();
-
+    print_temperatures();
     return true;
   }
   return false;
@@ -178,8 +264,20 @@ void pulse(void)
 double pipe_min_temperature(void)
 {
   double min_t;
-  min_t = min(t_pipe_outside, t_pipe_inside);
-  min_t = min(min_t, t_pipe_ground);
+  if (t_pipe_inside > t_pipe_outside)
+  {
+    min_t = t_pipe_outside;
+  }
+  else
+  {
+    min_t = t_pipe_inside;
+  }
+  if (min_t > t_pipe_ground)
+  {
+    min_t = t_pipe_ground;
+  }
+
+  return min_t;
 }
 
 void print_temperatures(void)
@@ -231,6 +329,8 @@ void setup()
   pinMode(BOILER_P, OUTPUT);
   pinMode(PIPE_HEATER_P, OUTPUT);
   pinMode(LED_P, OUTPUT);
+  pinMode(BTN_P, INPUT_PULLUP);
+  digitalWrite(LED_P, HIGH);
 
   // Get dalas count
   Serial.print("Found  ");
@@ -240,9 +340,12 @@ void setup()
   while (!temperature_read())
   {
   } //wait until temp sensor updated
-  print_temperatures();
 
   BTN.begin();
+  print_temperatures();
+  delay(100);
+  digitalWrite(LED_P, LOW);
+  Serial.println("Start!");
 }
 
 void loop()
